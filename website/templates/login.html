@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - RailGuard AI Control Center</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Custom styling -->
+    <link href="/static/css/style.css" rel="stylesheet">
+</head>
+<body class="d-flex align-items-center justify-content-center" style="height: 100vh;">
+
+    <div class="container">
+        <div class="row justify-content-center">
+            <div class="col-md-5">
+                <div class="glass-panel p-5 text-center">
+                    <h2 class="logo-text mb-2">RailGuard AI</h2>
+                    <p class="text-white-50 mb-4">Railway Track Monitoring Control Center</p>
+                    
+                    <div id="alert-error" class="alert alert-danger d-none" role="alert">
+                        Authentication Failed. Check credentials.
+                    </div>
+
+                    <form id="login-form">
+                        <div class="mb-3 text-start">
+                            <label for="username" class="form-label text-white-50">Operator Username</label>
+                            <input type="text" class="form-control glass-input" id="username" placeholder="Enter username" required value="admin">
+                        </div>
+                        <div class="mb-4 text-start">
+                            <label for="password" class="form-label text-white-50">Security Password</label>
+                            <input type="password" class="form-control glass-input" id="password" placeholder="Enter password" required value="admin123">
+                        </div>
+                        <button type="submit" class="btn btn-glow w-100 py-3">Authenticate Operator</button>
+                    </form>
+                    
+                    <div class="mt-4 text-white-50" style="font-size: 0.85rem;">
+                        Prototype Mock Mode Active. Default: <code>admin</code> / <code>admin123</code>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Login logic script -->
+    <script>
+        document.getElementById("login-form").addEventListener("submit", function(e) {
+            e.preventDefault();
+            const errEl = document.getElementById("alert-error");
+            errEl.classList.add("d-none");
+            
+            const payload = {
+                username: document.getElementById("username").value,
+                password: document.getElementById("password").value
+            };
+
+            fetch("/api/login", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify(payload)
+            })
+            .then(res => {
+                if (!res.ok) throw new Error("Unauthorized");
+                return res.json();
+            })
+            .then(data => {
+                localStorage.setItem("access_token", data.access_token);
+                window.location.href = "/dashboard";
+            })
+            .catch(err => {
+                errEl.classList.remove("d-none");
+            });
+        });
+    </script>
+</body>
+</html>

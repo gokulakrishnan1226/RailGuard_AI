@@ -1,0 +1,1 @@
+# Logger initialization file

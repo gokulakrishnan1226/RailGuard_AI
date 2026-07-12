@@ -1,0 +1,52 @@
+{
+  "project_name": "RailGuard AI",
+  "database": {
+    "host": "localhost",
+    "user": "root",
+    "password": "",
+    "database": "railguard_db",
+    "port": 3306,
+    "use_mock": true
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8000,
+    "secret_key": "SUPER_SECRET_RAILGUARD_SECURITY_KEY_KEEP_SAFE",
+    "algorithm": "HS256",
+    "access_token_expire_minutes": 1440
+  },
+  "esp32": {
+    "ip": "192.168.1.100",
+    "port": 80,
+    "enabled": false,
+    "vibration_threshold": 7.5
+  },
+  "inference": {
+    "confidence_thresholds": {
+      "human": 0.5,
+      "animal": 0.5,
+      "obstacle": 0.4,
+      "crack": 0.4,
+      "cleanliness": 0.5,
+      "damage": 0.5
+    },
+    "webcam_index": 0,
+    "voice_alerts": true,
+    "voice_rate": 150,
+    "voice_volume": 1.0
+  },
+  "training": {
+    "data_dir": "data/processed",
+    "output_dir": "models/trained_models",
+    "epochs": 15,
+    "batch_size": 16,
+    "learning_rate": 0.001,
+    "early_stopping_patience": 5,
+    "img_size": 224,
+    "split_ratio": {
+      "train": 0.7,
+      "val": 0.2,
+      "test": 0.1
+    }
+  }
+}
