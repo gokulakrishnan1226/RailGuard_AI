@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 Dashboard - RailGuard AI</title>
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+    <!-- Custom CSS -->
+    <style>
+        body { background-color: #121212; color: #f8f9fa; }
+        .card { background-color: #1e1e1e; border: 1px solid #333; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        .card-header { background-color: #2c2c2c; border-bottom: 1px solid #444; font-weight: bold; }
+        .status-indicator { width: 15px; height: 15px; border-radius: 50%; display: inline-block; }
+        .status-online { background-color: #28a745; box-shadow: 0 0 10px #28a745; }
+        .status-offline { background-color: #dc3545; box-shadow: 0 0 10px #dc3545; }
+        .btn-custom { margin: 5px; }
+        .loader {
+            border: 4px solid #f3f3f3; border-top: 4px solid #007bff; border-radius: 50%;
+            width: 24px; height: 24px; animation: spin 2s linear infinite; display: inline-block;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark border-bottom border-secondary">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="/dashboard"><i class="fa-solid fa-train"></i> RailGuard AI</a>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav ms-auto">
+                    <li class="nav-item">
+                        <a class="nav-link" href="/dashboard"><i class="fa-solid fa-chart-line"></i> Main Dashboard</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link active" href="/esp32"><i class="fa-solid fa-microchip"></i> ESP32 Control</a>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h2><i class="fa-solid fa-satellite-dish"></i> ESP32 Telemetry & Control</h2>
+            <div>
+                <span id="connection-status" class="status-indicator status-offline"></span>
+                <span id="connection-text" class="ms-2">Offline</span>
+                <div id="loading-spinner" class="loader ms-3 d-none"></div>
+            </div>
+        </div>
+
+        <!-- Telemetry Cards -->
+        <div class="row">
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-header"><i class="fa-solid fa-wifi"></i> WiFi RSSI</div>
+                    <div class="card-body">
+                        <h3 id="val-rssi">-- dBm</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-header"><i class="fa-solid fa-memory"></i> Heap Memory</div>
+                    <div class="card-body">
+                        <h3 id="val-heap">-- KB</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-header"><i class="fa-solid fa-clock"></i> Uptime</div>
+                    <div class="card-body">
+                        <h3 id="val-uptime">-- s</h3>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card text-center">
+                    <div class="card-header"><i class="fa-solid fa-battery-full"></i> Battery</div>
+                    <div class="card-body">
+                        <h3 id="val-battery">-- %</h3>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <!-- Hardware Status -->
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header"><i class="fa-solid fa-cogs"></i> Hardware Status</div>
+                    <div class="card-body">
+                        <table class="table table-dark table-striped">
+                            <tbody>
+                                <tr><th>Device ID</th><td id="val-device-id">ESP32_ROVER_01</td></tr>
+                                <tr><th>IP Address</th><td id="val-ip">--</td></tr>
+                                <tr><th>Last Heartbeat</th><td id="val-last-seen">--</td></tr>
+                                <tr><th>Motor State</th><td id="val-motor">--</td></tr>
+                                <tr><th>Laser Status</th><td id="val-laser">--</td></tr>
+                                <tr><th>GPS Status</th><td id="val-gps">--</td></tr>
+                                <tr><th>Vibration Level</th><td id="val-vibration">--</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Control Panel -->
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header"><i class="fa-solid fa-gamepad"></i> Control Panel</div>
+                    <div class="card-body text-center">
+                        <button class="btn btn-success btn-custom" onclick="sendCommand('START')"><i class="fa-solid fa-play"></i> Start Rover</button>
+                        <button class="btn btn-danger btn-custom" onclick="sendCommand('STOP')"><i class="fa-solid fa-stop"></i> Stop Rover</button>
+                        <br>
+                        <button class="btn btn-warning btn-custom" onclick="sendCommand('LASER_ON')"><i class="fa-solid fa-lightbulb"></i> Laser ON</button>
+                        <button class="btn btn-secondary btn-custom" onclick="sendCommand('LASER_OFF')"><i class="fa-regular fa-lightbulb"></i> Laser OFF</button>
+                        <br>
+                        <button class="btn btn-info btn-custom" onclick="sendCommand('LEFT')"><i class="fa-solid fa-arrow-left"></i> Turn Left</button>
+                        <button class="btn btn-info btn-custom" onclick="sendCommand('RIGHT')"><i class="fa-solid fa-arrow-right"></i> Turn Right</button>
+                        <br>
+                        <hr class="border-secondary">
+                        <button class="btn btn-outline-danger btn-custom" onclick="sendCommand('RESTART')"><i class="fa-solid fa-power-off"></i> Restart ESP32</button>
+                        <button class="btn btn-outline-primary btn-custom" onclick="pingDevice()"><i class="fa-solid fa-satellite-dish"></i> Ping Backend</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div class="toast-container position-fixed bottom-0 end-0 p-3">
+        <div id="liveToast" class="toast align-items-center text-bg-primary border-0" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="d-flex">
+                <div class="toast-body" id="toast-msg">
+                    Command sent successfully.
+                </div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <!-- AJAX Script -->
+    <script>
+        const deviceId = "ESP32_ROVER_01";
+
+        function showToast(message, type="primary") {
+            const toastEl = document.getElementById('liveToast');
+            const toastMsg = document.getElementById('toast-msg');
+            toastEl.className = `toast align-items-center text-bg-${type} border-0`;
+            toastMsg.textContent = message;
+            const toast = new bootstrap.Toast(toastEl);
+            toast.show();
+        }
+
+        async function sendCommand(cmd) {
+            try {
+                const response = await fetch('/api/esp32/queue_command', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ device_id: deviceId, command: cmd })
+                });
+                const data = await response.json();
+                if (data.status === 'queued') {
+                    showToast(`Command ${cmd} queued for execution!`, 'success');
+                } else {
+                    showToast(`Failed to queue command`, 'danger');
+                }
+            } catch (error) {
+                console.error("Error sending command:", error);
+                showToast(`Error sending command`, 'danger');
+            }
+        }
+
+        async function pingDevice() {
+            try {
+                const response = await fetch('/api/esp32/ping');
+                const data = await response.json();
+                if (data.status === 'pong') {
+                    showToast('Backend API is reachable.', 'info');
+                }
+            } catch (error) {
+                showToast('Backend API is unreachable.', 'danger');
+            }
+        }
+
+        async function fetchLatestStatus() {
+            document.getElementById('loading-spinner').classList.remove('d-none');
+            try {
+                const response = await fetch('/api/esp32/latest');
+                const data = await response.json();
+                
+                if (data && data.device_id) {
+                    // Check offline status (if last seen > 15s ago)
+                    const lastSeenDate = new Date(data.last_seen);
+                    const now = new Date();
+                    const isOffline = (now - lastSeenDate) > 15000;
+
+                    const ind = document.getElementById('connection-status');
+                    const txt = document.getElementById('connection-text');
+                    if (isOffline) {
+                        ind.className = 'status-indicator status-offline';
+                        txt.textContent = 'Offline';
+                    } else {
+                        ind.className = 'status-indicator status-online';
+                        txt.textContent = 'Online';
+                    }
+
+                    document.getElementById('val-rssi').textContent = data.wifi_strength + ' dBm';
+                    document.getElementById('val-heap').textContent = Math.round(data.heap_memory / 1024) + ' KB';
+                    document.getElementById('val-uptime').textContent = data.uptime + ' s';
+                    document.getElementById('val-battery').textContent = data.battery + ' %';
+                    
+                    document.getElementById('val-ip').textContent = data.ip_address;
+                    document.getElementById('val-last-seen').textContent = lastSeenDate.toLocaleTimeString();
+                    document.getElementById('val-motor').textContent = data.motor;
+                    document.getElementById('val-laser').textContent = data.laser ? "ON" : "OFF";
+                    document.getElementById('val-gps').textContent = data.gps ? "Active" : "Inactive";
+                    document.getElementById('val-vibration').textContent = data.vibration.toFixed(2);
+                }
+            } catch (error) {
+                console.error("Error fetching status:", error);
+                document.getElementById('connection-status').className = 'status-indicator status-offline';
+                document.getElementById('connection-text').textContent = 'Error';
+            } finally {
+                document.getElementById('loading-spinner').classList.add('d-none');
+            }
+        }
+
+        // Fetch status every 2 seconds
+        setInterval(fetchLatestStatus, 2000);
+        // Initial fetch
+        fetchLatestStatus();
+    </script>
+</body>
+</html>

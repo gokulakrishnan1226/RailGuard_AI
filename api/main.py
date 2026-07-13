@@ -9,8 +9,11 @@ from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel as PydanticBaseModel
-from typing import Optional
+from pydantic import BaseModel as PydanticBaseModel, Field
+from typing import Optional, Dict
+
+# Global command queue for ESP32 devices
+esp32_commands: Dict[str, str] = {}
 
 from utils.config import config
 from utils.logger import setup_logger
@@ -19,7 +22,7 @@ from api.auth import verify_password, get_password_hash, create_access_token, de
 from inference.detector import RailGuardDetector
 
 logger = setup_logger("api_main")
-
+esp32_logger = setup_logger("esp32", log_file="esp32.log")
 # FastAPI App configuration
 app = FastAPI(
     title="RailGuard AI",
@@ -168,6 +171,31 @@ class LoginRequest(PydanticBaseModel):
     username: str
     password: str
 
+# Pydantic models for ESP32 API
+class ESP32Status(PydanticBaseModel):
+    device_id: str
+    ip_address: str
+    wifi_strength: int
+    heap_memory: int
+    uptime: int
+    status: str
+    battery: int
+    laser: bool
+    motor: str
+    gps: bool
+    vibration: float
+
+class ESP32Command(PydanticBaseModel):
+    device_id: str
+    command: str
+
+def verify_esp32_api_key(request: Request):
+    api_key = request.headers.get("x-api-key")
+    expected_key = config["esp32"].get("api_key", "")
+    if not api_key or api_key != expected_key:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing API Key")
+    return True
+
 # --- HTTP ENDPOINTS & WEB ROUTES ---
 
 @app.get("/", response_class=HTMLResponse)
@@ -184,6 +212,11 @@ def get_login(request: Request):
 def get_dashboard(request: Request):
     """Renders the control panel telemetry dashboard."""
     return templates.TemplateResponse(request, "index.html")
+
+@app.get("/esp32", response_class=HTMLResponse)
+def get_esp32_dashboard(request: Request):
+    """Renders the ESP32 control panel dashboard."""
+    return templates.TemplateResponse(request, "esp32.html")
 
 # --- REST APIs ---
 
@@ -279,6 +312,57 @@ def api_status():
             "longitude": telemetry["gps_longitude"] if telemetry else 77.2090
         }
     }
+
+# --- ESP32 APIs ---
+
+@app.post("/api/esp32/register")
+def esp32_register(status: ESP32Status, _: bool = Depends(verify_esp32_api_key)):
+    db_manager.update_esp32_status(**status.dict())
+    return {"status": "registered"}
+
+@app.post("/api/esp32/status")
+def esp32_status_update(status: ESP32Status, _: bool = Depends(verify_esp32_api_key)):
+    db_manager.update_esp32_status(**status.dict())
+    return {"status": "updated"}
+
+@app.post("/api/esp32/heartbeat")
+def esp32_heartbeat(status: ESP32Status, _: bool = Depends(verify_esp32_api_key)):
+    esp32_logger.debug(f"Heartbeat from {status.device_id}")
+    db_manager.update_esp32_status(**status.dict())
+    return {"status": "acknowledged"}
+
+@app.get("/api/esp32/command")
+def esp32_get_command(device_id: str, _: bool = Depends(verify_esp32_api_key)):
+    cmd = esp32_commands.pop(device_id, "NONE")
+    return {"command": cmd}
+
+@app.post("/api/esp32/queue_command")
+def esp32_queue_command(cmd: ESP32Command):
+    """Internal API to queue a command from the web dashboard."""
+    esp32_commands[cmd.device_id] = cmd.command
+    esp32_logger.info(f"Queued command {cmd.command} for {cmd.device_id}")
+    return {"status": "queued"}
+
+@app.post("/api/esp32/telemetry")
+def esp32_telemetry(status: ESP32Status, _: bool = Depends(verify_esp32_api_key)):
+    db_manager.add_telemetry(vibration_level=status.vibration, motor_state=status.motor)
+    db_manager.update_esp32_status(**status.dict())
+    return {"status": "logged"}
+
+@app.post("/api/esp32/alert")
+def esp32_alert(payload: dict, _: bool = Depends(verify_esp32_api_key)):
+    esp32_logger.warning(f"ESP32 Alert: {payload}")
+    return {"status": "alert_received"}
+
+@app.get("/api/esp32/ping")
+def esp32_ping():
+    return {"status": "pong"}
+
+@app.get("/api/esp32/latest")
+def esp32_get_latest_status():
+    """Returns the latest status for the web dashboard."""
+    status = db_manager.get_esp32_status()
+    return status if status else {}
 
 # --- VIDEO MJPEG FEED ROUTE ---
 

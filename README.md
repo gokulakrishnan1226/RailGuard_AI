@@ -35,3 +35,16 @@ Login details:
 - See [TRAINING.md](file:///d:/Projects/Railguard%20ai/docs/TRAINING.md) for custom dataset configurations.
 - See [TESTING.md](file:///d:/Projects/Railguard%20ai/docs/TESTING.md) for webcam and endpoint test examples.
 - See [DEPLOYMENT.md](file:///d:/Projects/Railguard%20ai/docs/DEPLOYMENT.md) for Nginx proxying configurations.
+
+---
+
+## ESP32 Integration
+
+RailGuard AI includes a full ESP32 integration for telemetry and hardware control.
+To use the ESP32:
+
+1. Open `esp32/railguard_esp32/railguard_esp32.ino` in the **Arduino IDE**.
+2. Install the **ArduinoJson** library from the Library Manager.
+3. Update your WiFi `ssid` and `password` in the code, and set `backend_ip` to your machine's IP address (e.g. `192.168.43.181`).
+4. Upload to the ESP32.
+5. In the Web Control Center, navigate to **ESP32 Control** to view live telemetry and send commands (Start, Stop, Laser).

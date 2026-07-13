@@ -1,207 +1,262 @@
-/*
-  RailGuard AI - ESP32 WiFi Patroller Hardware Control Firmware
-  
-  Description:
-    Connects to the local patrol WiFi network and hosts an HTTP REST server.
-    Listens for JSON commands from the Python FastAPI server to actuate motors,
-    LED indicators, alert buzzers, and camera pan servos.
-    Periodically measures track vibration levels and returns GPS coordinate telemetry.
-*/
-
 #include <WiFi.h>
+#include <HTTPClient.h>
 #include <WebServer.h>
-#include <ArduinoJson.h> // Ensure "ArduinoJson" by Benoit Blanchon is installed in Arduino IDE
-#include <ESP32Servo.h>  // Ensure "ESP32Servo" by John K. Bennett is installed in Arduino IDE
+#include <ArduinoJson.h>
+#include <esp_task_wdt.h>
 
-// WiFi Credentials
-const char* ssid = "RailGuard_Patrol_Network";
-const char* password = "security_override_2026";
+// --- Configuration ---
+const char* ssid = "Infinix";
+const char* password = "gokul2006";
 
-// HTTP Port 80 Web Server
+const char* backend_ip = "192.168.43.181";
+const int backend_port = 8000;
+const char* api_key = "RAILGUARD_ESP32_SECRET_KEY";
+
+const String device_id = "ESP32_ROVER_01";
+
+// --- Hardware Pins (Placeholders) ---
+const int MOTOR_IN1 = 12;
+const int MOTOR_IN2 = 14;
+const int MOTOR_IN3 = 27;
+const int MOTOR_IN4 = 26;
+const int MOTOR_ENA = 25;
+const int MOTOR_ENB = 33;
+const int LASER_PIN = 4;
+const int VIBRATION_PIN = 34; // Analog input
+const int TRIG_PIN = 5;
+const int ECHO_PIN = 18;
+const int SERVO_PIN = 19;
+// GPS pins can be configured on Serial1 or Serial2 (e.g., RX=16, TX=17)
+
+// --- State Variables ---
+String motor_status = "STOPPED";
+bool laser_status = false;
+bool gps_status = false; // Mocking true/false for now
+bool sensor_status = true;
+float vibration_level = 0.0;
+unsigned long lastHeartbeatTime = 0;
+const unsigned long heartbeatInterval = 5000; // 5 seconds
+
+// --- Web Server ---
 WebServer server(80);
 
-// Hardware Actuator Pin Mappings
-const int MOTOR_PWM_PIN = 12;  // Speed control
-const int MOTOR_DIR_PIN = 14;  // Direction control
-const int LED_RED_PIN = 25;    // Alert indicator
-const int LED_GREEN_PIN = 26;  // Safe indicator
-const int BUZZER_PIN = 27;     // Siren buzzer
-const int SERVO_PIN = 13;      // Camera pan servo
-const int VIB_SENSOR_PIN = 34; // Analog vibration sensor input
+// --- Watchdog ---
+#define WDT_TIMEOUT 15 // 15 seconds WDT
 
-// Servo Object
-Servo panServo;
-
-// Telemetry State Variables
-float currentVibration = 1.2;
-double currentLatitude = 28.6139;
-double currentLongitude = 77.2090;
-String currentMotorState = "STOPPED";
-bool currentBuzzerState = false;
-int currentServoAngle = 90;
+// --- Function Prototypes ---
+void connectWiFi();
+void handleStatus();
+void handleCommand();
+void sendHeartbeat();
+void fetchCommands();
+void executeCommand(String cmd);
+void initHardware();
 
 void setup() {
   Serial.begin(115200);
-  
-  // Configure Pins
-  pinMode(MOTOR_PWM_PIN, OUTPUT);
-  pinMode(MOTOR_DIR_PIN, OUTPUT);
-  pinMode(LED_RED_PIN, OUTPUT);
-  pinMode(LED_GREEN_PIN, OUTPUT);
-  pinMode(BUZZER_PIN, OUTPUT);
-  pinMode(VIB_SENSOR_PIN, INPUT);
+  delay(1000);
+  Serial.println("Starting RailGuard ESP32 Firmware...");
 
-  // Initialize Servo
-  panServo.attach(SERVO_PIN);
-  panServo.write(currentServoAngle); // Start centered (90 deg)
-  
-  // Set default LED states (Safe green on, alert off)
-  digitalWrite(LED_GREEN_PIN, HIGH);
-  digitalWrite(LED_RED_PIN, LOW);
-  
-  // Connect to WiFi Network
-  Serial.print("Connecting to WiFi network: ");
-  Serial.println(ssid);
-  WiFi.begin(ssid, password);
-  
-  // Wait for connection with visual indicator blinking
-  int timeoutCounter = 0;
-  while (WiFi.status() != WL_CONNECTED && timeoutCounter < 30) {
-    delay(500);
-    Serial.print(".");
-    digitalWrite(LED_GREEN_PIN, !digitalRead(LED_GREEN_PIN));
-    timeoutCounter++;
-  }
-  
-  if (WiFi.status() == WL_CONNECTED) {
-    digitalWrite(LED_GREEN_PIN, HIGH);
-    Serial.println("\nWiFi connected successfully!");
-    Serial.print("IP Address allocated: ");
-    Serial.println(WiFi.localIP());
-  } else {
-    // Fail-safe: Flash red LED continuously
-    digitalWrite(LED_GREEN_PIN, LOW);
-    digitalWrite(LED_RED_PIN, HIGH);
-    Serial.println("\nWiFi Connection failed. Running in Offline telemetry mode.");
-  }
+  // Init Watchdog
+  esp_task_wdt_init(WDT_TIMEOUT, true);
+  esp_task_wdt_add(NULL);
 
-  // Setup HTTP server endpoints
-  server.on("/control", HTTP_POST, handleControlPost);
-  server.on("/telemetry", HTTP_GET, handleTelemetryGet);
+  initHardware();
+  connectWiFi();
+
+  // Setup Web Server Routes
+  server.on("/status", HTTP_GET, handleStatus);
+  server.on("/command", HTTP_POST, handleCommand);
   server.begin();
-  Serial.println("HTTP Web Server started on port 80.");
+  Serial.println("HTTP Server started on port 80");
 }
 
 void loop() {
   server.handleClient();
   
-  // Read analog vibration levels from sensor pin
-  int rawVib = analogRead(VIB_SENSOR_PIN);
-  currentVibration = (rawVib / 4095.0) * 10.0; // scale to 0-10 g metric
-  
-  // Simulate moving GPS Coordinates slightly for patroller movement
-  if (currentMotorState == "FORWARD") {
-    currentLatitude += 0.00001;
-    currentLongitude += 0.000008;
+  // Reconnect WiFi if disconnected
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi disconnected. Reconnecting...");
+    connectWiFi();
   }
-  
-  delay(50); // Small delay to yield context
+
+  // Non-blocking Heartbeat & Polling
+  if (millis() - lastHeartbeatTime >= heartbeatInterval) {
+    lastHeartbeatTime = millis();
+    sendHeartbeat();
+    fetchCommands();
+  }
+
+  // Reset Watchdog Timer
+  esp_task_wdt_reset();
 }
 
-// POST endpoint handler for controlling actuators
-void handleControlPost() {
-  if (server.hasArg("plain") == false) {
-    server.send(400, "text/plain", "Missing JSON request body.");
-    return;
-  }
+void initHardware() {
+  // Initialize placeholder pins
+  pinMode(LASER_PIN, OUTPUT);
+  digitalWrite(LASER_PIN, LOW);
   
-  String body = server.arg("plain");
+  pinMode(MOTOR_IN1, OUTPUT);
+  pinMode(MOTOR_IN2, OUTPUT);
+  pinMode(MOTOR_IN3, OUTPUT);
+  pinMode(MOTOR_IN4, OUTPUT);
+  
+  // More initializations can be added here
+}
+
+void connectWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to WiFi: ");
+  Serial.println(ssid);
+
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+  Serial.println();
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("WiFi connected!");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("WiFi connection failed.");
+  }
+}
+
+// --- WebServer Handlers ---
+
+void handleStatus() {
   StaticJsonDocument<256> doc;
-  DeserializationError error = deserializeJson(doc, body);
+  doc["device_id"] = device_id;
+  doc["uptime"] = millis() / 1000;
+  doc["free_heap"] = ESP.getFreeHeap();
+  doc["rssi"] = WiFi.RSSI();
+  doc["motor"] = motor_status;
+  doc["laser"] = laser_status;
+  doc["gps"] = gps_status;
+  doc["vibration"] = vibration_level;
   
-  if (error) {
-    server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"JSON parsing failed.\"}");
-    return;
-  }
-  
-  // 1. Motor controls: "forward", "stop", "reverse"
-  if (doc.containsKey("motor")) {
-    String motorCmd = doc["motor"];
-    if (motorCmd == "forward") {
-      digitalWrite(MOTOR_DIR_PIN, HIGH);
-      analogWrite(MOTOR_PWM_PIN, 200); // 78% speed
-      currentMotorState = "FORWARD";
-    } else if (motorCmd == "reverse") {
-      digitalWrite(MOTOR_DIR_PIN, LOW);
-      analogWrite(MOTOR_PWM_PIN, 200);
-      currentMotorState = "REVERSE";
-    } else { // stop
-      analogWrite(MOTOR_PWM_PIN, 0);
-      currentMotorState = "STOPPED";
-    }
-  }
-  
-  // 2. LED controls: "red", "green", "off"
-  if (doc.containsKey("led")) {
-    String ledCmd = doc["led"];
-    if (ledCmd == "red") {
-      digitalWrite(LED_RED_PIN, HIGH);
-      digitalWrite(LED_GREEN_PIN, LOW);
-    } else if (ledCmd == "green") {
-      digitalWrite(LED_RED_PIN, LOW);
-      digitalWrite(LED_GREEN_PIN, HIGH);
-    } else {
-      digitalWrite(LED_RED_PIN, LOW);
-      digitalWrite(LED_GREEN_PIN, LOW);
-    }
-  }
-  
-  // 3. Buzzer / Siren controls (boolean)
-  if (doc.containsKey("buzzer")) {
-    currentBuzzerState = doc["buzzer"];
-    if (currentBuzzerState) {
-      // Sound a 1kHz square tone on pin
-      tone(BUZZER_PIN, 1000); 
-    } else {
-      noTone(BUZZER_PIN);
-    }
-  }
-  
-  // 4. Servo panning controls (integer angle 0-180)
-  if (doc.containsKey("servo")) {
-    int targetAngle = doc["servo"];
-    if (targetAngle >= 0 && targetAngle <= 180) {
-      currentServoAngle = targetAngle;
-      panServo.write(currentServoAngle);
-    }
-  }
-
-  // Respond with success JSON telemetry status
-  String responseBody;
-  StaticJsonDocument<256> respDoc;
-  respDoc["status"] = "success";
-  respDoc["vibration"] = currentVibration;
-  respDoc["gps_lat"] = currentLatitude;
-  respDoc["gps_lon"] = currentLongitude;
-  respDoc["motor_state"] = currentMotorState;
-  respDoc["buzzer"] = currentBuzzerState;
-  respDoc["servo_angle"] = currentServoAngle;
-  
-  serializeJson(respDoc, responseBody);
-  server.send(200, "application/json", responseBody);
+  String response;
+  serializeJson(doc, response);
+  server.send(200, "application/json", response);
 }
 
-// GET endpoint handler returning current telemetries
-void handleTelemetryGet() {
-  String responseBody;
-  StaticJsonDocument<256> respDoc;
-  respDoc["vibration"] = currentVibration;
-  respDoc["gps_lat"] = currentLatitude;
-  respDoc["gps_lon"] = currentLongitude;
-  respDoc["motor_state"] = currentMotorState;
-  respDoc["buzzer"] = currentBuzzerState;
-  respDoc["servo_angle"] = currentServoAngle;
-  
-  serializeJson(respDoc, responseBody);
-  server.send(200, "application/json", responseBody);
+void handleCommand() {
+  if (server.hasArg("plain")) {
+    String body = server.arg("plain");
+    StaticJsonDocument<256> doc;
+    DeserializationError error = deserializeJson(doc, body);
+    
+    if (error) {
+      server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Invalid JSON\"}");
+      return;
+    }
+
+    String cmd = doc["command"].as<String>();
+    executeCommand(cmd);
+    
+    server.send(200, "application/json", "{\"status\":\"executed\",\"command\":\"" + cmd + "\"}");
+  } else {
+    server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"Empty body\"}");
+  }
+}
+
+void executeCommand(String cmd) {
+  cmd.toUpperCase();
+  Serial.print("Executing command: ");
+  Serial.println(cmd);
+
+  if (cmd == "START") {
+    motor_status = "RUNNING";
+    // digitalWrite(MOTOR_IN1, HIGH); etc.
+  } 
+  else if (cmd == "STOP") {
+    motor_status = "STOPPED";
+    // digitalWrite(MOTOR_IN1, LOW); etc.
+  }
+  else if (cmd == "LEFT") {
+    motor_status = "TURNING_LEFT";
+  }
+  else if (cmd == "RIGHT") {
+    motor_status = "TURNING_RIGHT";
+  }
+  else if (cmd == "LASER_ON") {
+    laser_status = true;
+    digitalWrite(LASER_PIN, HIGH);
+  }
+  else if (cmd == "LASER_OFF") {
+    laser_status = false;
+    digitalWrite(LASER_PIN, LOW);
+  }
+  else if (cmd == "RESTART") {
+    Serial.println("Restarting ESP32...");
+    delay(1000);
+    ESP.restart();
+  }
+}
+
+// --- Backend Communication ---
+
+void sendHeartbeat() {
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    String url = String("http://") + backend_ip + ":" + String(backend_port) + "/api/esp32/heartbeat";
+    http.begin(url);
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("x-api-key", api_key);
+
+    StaticJsonDocument<256> doc;
+    doc["device_id"] = device_id;
+    doc["ip_address"] = WiFi.localIP().toString();
+    doc["wifi_strength"] = WiFi.RSSI();
+    doc["heap_memory"] = ESP.getFreeHeap();
+    doc["uptime"] = millis() / 1000;
+    doc["status"] = "ONLINE";
+    doc["battery"] = 100; // Mock battery
+    doc["laser"] = laser_status;
+    doc["motor"] = motor_status;
+    doc["gps"] = gps_status;
+    doc["vibration"] = vibration_level;
+
+    String requestBody;
+    serializeJson(doc, requestBody);
+
+    int httpResponseCode = http.POST(requestBody);
+    if (httpResponseCode > 0) {
+      Serial.print("Heartbeat sent, response code: ");
+      Serial.println(httpResponseCode);
+    } else {
+      Serial.print("Error sending heartbeat: ");
+      Serial.println(httpResponseCode);
+    }
+    http.end();
+  }
+}
+
+void fetchCommands() {
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    String url = String("http://") + backend_ip + ":" + String(backend_port) + "/api/esp32/command?device_id=" + device_id;
+    http.begin(url);
+    http.addHeader("x-api-key", api_key);
+
+    int httpResponseCode = http.GET();
+    if (httpResponseCode == 200) {
+      String response = http.getString();
+      StaticJsonDocument<256> doc;
+      DeserializationError error = deserializeJson(doc, response);
+      
+      if (!error && doc.containsKey("command")) {
+        String cmd = doc["command"].as<String>();
+        if (cmd != "" && cmd != "NONE") {
+            executeCommand(cmd);
+        }
+      }
+    }
+    http.end();
+  }
 }

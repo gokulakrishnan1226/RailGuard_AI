@@ -104,6 +104,7 @@ class DatabaseManager:
         ]
         self.mock_alerts = []
         self.mock_telemetry = []
+        self.mock_esp32_status = None
         self.connection = None
         
         # Attempt initialization
@@ -180,6 +181,25 @@ class DatabaseManager:
                     motor_state VARCHAR(50) DEFAULT 'STOPPED',
                     buzzer_state BOOLEAN DEFAULT FALSE,
                     servo_angle INT DEFAULT 90
+                );
+            """)
+            # ESP32 Status table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS esp32_status (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    device_id VARCHAR(100) NOT NULL,
+                    ip_address VARCHAR(50),
+                    wifi_strength INT,
+                    heap_memory INT,
+                    uptime INT,
+                    status VARCHAR(50),
+                    battery INT,
+                    laser BOOLEAN,
+                    motor VARCHAR(50),
+                    gps BOOLEAN,
+                    vibration FLOAT,
+                    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             """)
             
@@ -373,6 +393,81 @@ class DatabaseManager:
             return None
         except Error as e:
             logger.error(f"Error reading telemetry from DB: {e}")
+            return None
+
+    def update_esp32_status(self, device_id, ip_address, wifi_strength, heap_memory, uptime, status, battery, laser, motor, gps, vibration):
+        """Updates the latest ESP32 status record."""
+        now = datetime.datetime.now()
+        if self.use_mock:
+            self.mock_esp32_status = {
+                "device_id": device_id,
+                "ip_address": ip_address,
+                "wifi_strength": int(wifi_strength),
+                "heap_memory": int(heap_memory),
+                "uptime": int(uptime),
+                "status": status,
+                "battery": int(battery),
+                "laser": bool(laser),
+                "motor": motor,
+                "gps": bool(gps),
+                "vibration": float(vibration),
+                "last_seen": now
+            }
+            return True
+
+        try:
+            self.connect()
+            cursor = self.connection.cursor()
+            
+            # Check if exists
+            cursor.execute("SELECT id FROM esp32_status WHERE device_id = %s", (device_id,))
+            row = cursor.fetchone()
+            
+            if row:
+                cursor.execute(
+                    """UPDATE esp32_status SET ip_address=%s, wifi_strength=%s, heap_memory=%s, uptime=%s, 
+                       status=%s, battery=%s, laser=%s, motor=%s, gps=%s, vibration=%s, last_seen=CURRENT_TIMESTAMP
+                       WHERE device_id=%s""",
+                    (ip_address, int(wifi_strength), int(heap_memory), int(uptime), status, int(battery), bool(laser), motor, bool(gps), float(vibration), device_id)
+                )
+            else:
+                cursor.execute(
+                    """INSERT INTO esp32_status (device_id, ip_address, wifi_strength, heap_memory, uptime, status, battery, laser, motor, gps, vibration)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (device_id, ip_address, int(wifi_strength), int(heap_memory), int(uptime), status, int(battery), bool(laser), motor, bool(gps), float(vibration))
+                )
+            self.connection.commit()
+            cursor.close()
+            return True
+        except Error as e:
+            logger.error(f"Error updating ESP32 status in DB: {e}")
+            return False
+
+    def get_esp32_status(self, device_id="ESP32_ROVER_01"):
+        """Gets the latest ESP32 status record."""
+        if self.use_mock:
+            if self.mock_esp32_status:
+                s = self.mock_esp32_status.copy()
+                if isinstance(s["last_seen"], datetime.datetime):
+                    s["last_seen"] = s["last_seen"].isoformat()
+                return s
+            return None
+
+        try:
+            self.connect()
+            cursor = self.connection.cursor(dictionary=True)
+            cursor.execute("SELECT * FROM esp32_status WHERE device_id = %s ORDER BY id DESC LIMIT 1", (device_id,))
+            row = cursor.fetchone()
+            cursor.close()
+            if row:
+                if isinstance(row["last_seen"], datetime.datetime):
+                    row["last_seen"] = row["last_seen"].isoformat()
+                if isinstance(row["created_at"], datetime.datetime):
+                    row["created_at"] = row["created_at"].isoformat()
+                return row
+            return None
+        except Error as e:
+            logger.error(f"Error reading ESP32 status from DB: {e}")
             return None
 
 # Global Singleton Manager

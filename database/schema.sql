@@ -42,3 +42,21 @@ CREATE TABLE IF NOT EXISTS esp32_telemetry (
 INSERT INTO users (username, password_hash, role)
 SELECT 'admin', '$2b$12$R.S2uU61eZgG6z9.qWc2UuU7p60i1nNlV0J0c2K/pM/P7rE.VlyjK', 'admin'
 WHERE NOT EXISTS (SELECT 1 FROM users WHERE username = 'admin');
+
+-- ESP32 Status table
+CREATE TABLE IF NOT EXISTS esp32_status (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    device_id VARCHAR(100) NOT NULL,
+    ip_address VARCHAR(50),
+    wifi_strength INT,
+    heap_memory INT,
+    uptime INT,
+    status VARCHAR(50),
+    battery INT,
+    laser BOOLEAN,
+    motor VARCHAR(50),
+    gps BOOLEAN,
+    vibration FLOAT,
+    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
